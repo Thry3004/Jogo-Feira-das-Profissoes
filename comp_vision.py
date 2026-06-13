@@ -52,20 +52,33 @@ class VisionController:
 
             landmarks = resultados.pose_landmarks.landmark
             
-            pulso_esq = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST]
-            pulso_dir = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
+            cotovelo_esq = landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW]
+            cotovelo_dir = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
 
-            if pulso_esq.visibility > 0.5 and pulso_dir.visibility > 0.5:
+            if cotovelo_esq.visibility > 0.5 and cotovelo_dir.visibility > 0.5:
                 
-                dx = pulso_dir.x - pulso_esq.x
-                dy = pulso_dir.y - pulso_esq.y
+                # Usamos abs() em dx para garantir que a distância horizontal seja sempre positiva.
+                # Isso impede o "salto" matemático do atan2 para 180 graus.
+                dx = abs(cotovelo_dir.x - cotovelo_esq.x)
                 
+                # Se dx for zero (braços colados), evitamos divisão por zero
+                if dx == 0:
+                    dx = 0.00001
+                
+                # Forçamos a diferença de Y pura
+                dy = cotovelo_esq.y - cotovelo_dir.y 
+                
+                # Calcula o ângulo real
                 angulo_radianos = math.atan2(dy, dx)
                 angulo_graus = math.degrees(angulo_radianos)
-                angulo_max = 45.0
                 
+                # Aumentamos um pouco o limite para dar mais margem de movimento suave
+                angulo_max = 35.0
+                
+                # Limita o ângulo entre -35 e 35 graus
                 angulo_limitado = max(-angulo_max, min(angulo_max, angulo_graus))
                 
+                # Agora o cálculo vai gerar números perfeitamente fracionados (0.12, 0.45, etc.)
                 multiplicador_velocidade = angulo_limitado / angulo_max
 
         return multiplicador_velocidade, frame
