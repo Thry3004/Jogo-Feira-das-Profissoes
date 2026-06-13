@@ -68,11 +68,3 @@ python main.py
 *   Adicionar power-ups para o jogador.
 *   Integrar áudio e música para uma experiência mais imersiva.
 *   Melhorar a calibração da visão computacional para diferentes ambientes e iluminações.
-
-## Contribuições
-
-Contribuições são bem-vindas! Se você tiver sugestões ou melhorias, sinta-se à vontade para abrir uma issue ou enviar um pull request.
-
-## Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
