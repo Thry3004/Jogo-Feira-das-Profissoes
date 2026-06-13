@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import math
 
+
 class VisionController:
 
     #função para inicializar a câmera e o modelo de detecção de pose do MediaPipe

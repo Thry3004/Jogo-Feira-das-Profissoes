@@ -4,8 +4,10 @@ import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
+import cv2
+import mediapipe
 import pygame
+from comp_vision import VisionController
 
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
@@ -278,28 +280,33 @@ class Player:
         self.rect = self.image.get_rect(center=center)
         self.rect.bottom = bottom
 
-    def update(self, dt, keys):
+    def update(self, dt, keys, input_direcao=0):
         accel = 2850 * self.layout.scale
         friction = 7.0
         max_speed = 760 * self.layout.scale
-        direction = 0
+        direction = 0.0
+        
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             direction -= 1
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             direction += 1
 
-        if direction:
+        if direction == 0:
+            direction = input_direcao
+
+        if direction != 0.0:
             self.vel_x += direction * accel * dt
         else:
             self.vel_x -= self.vel_x * min(1, friction * dt)
 
         self.vel_x = clamp(self.vel_x, -max_speed, max_speed)
         self.rect.x += int(self.vel_x * dt)
-        # Borda infinita apenas para o player: ao sair por um lado, reaparece no outro.
+        
         if self.rect.right < self.layout.play_rect.left:
             self.rect.left = self.layout.play_rect.right
         elif self.rect.left > self.layout.play_rect.right:
             self.rect.right = self.layout.play_rect.left
+            
         self.shoot_timer = max(0, self.shoot_timer - dt)
         self.invuln = max(0, self.invuln - dt)
         self.update_reload(dt)
@@ -584,13 +591,21 @@ class Game:
         info = pygame.display.Info()
         self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN)
         self.clock = pygame.time.Clock()
+
+        self.vision = VisionController()
+
+
         self.layout = Layout.from_screen(*self.screen.get_size())
         self.assets = Assets(self.layout)
         self.configure_fonts()
         self.state = "name"
         self.player_name = ""
         self.ranking = load_ranking()
+
+        self.cv_direction = 0
+
         self.reset_game()
+        
 
     def configure_fonts(self):
         self.font_big = pygame.font.Font(None, int(58 * self.layout.scale))
@@ -663,10 +678,12 @@ class Game:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                self.vision.close()
                 pygame.quit()
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
+                    self.vision.close()
                     pygame.quit()
                     sys.exit()
                 if event.key == pygame.K_F11:
@@ -720,15 +737,17 @@ class Game:
         self.screen.blit(scaled, r)
 
     def update_playing(self, dt):
-        keys = pygame.key.get_pressed()
-        self.player.update(dt, keys)
-        self.auto_player_fire()
-        self.update_enemies(dt)
-        self.update_boss(dt)
-        self.update_bullets(dt)
-        self.update_explosions(dt)
-        self.check_collisions()
-        self.check_end_conditions()
+            keys = pygame.key.get_pressed()
+            
+            self.player.update(dt, keys, self.cv_direction)
+
+            self.auto_player_fire()
+            self.update_enemies(dt)
+            self.update_boss(dt)
+            self.update_bullets(dt)
+            self.update_explosions(dt)
+            self.check_collisions()
+            self.check_end_conditions()
 
     def auto_player_fire(self):
         if self.player.can_shoot():
@@ -1055,7 +1074,16 @@ class Game:
     def run(self):
         while True:
             dt = self.clock.tick(60) / 1000
+
+            self.cv_direction, frame_camera = self.vision.get_tilt_angle()
+
+            if frame_camera is not None:
+                cv2.imshow("Feedback MediaPipe - Jogo Feira", frame_camera)
+                cv2.waitKey(1) # Impede que a janela do OpenCV congele
+
             self.handle_events()
+            self.draw_background()
+
             if self.state == "playing":
                 self.update_playing(dt)
                 self.draw_playing()
