@@ -7,15 +7,25 @@ class VisionController:
 
     #função para inicializar a câmera e o modelo de detecção de pose do MediaPipe
     def __init__(self):
+        self.cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        if not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(0)
+
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        
         self.pose = self.mp_pose.Pose(
-            min_detection_confidence=0.7, 
-            min_tracking_confidence=0.7
+            static_image_mode=False,
+            model_complexity=1,
+            smooth_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
         )
-        
-        self.cap = cv2.VideoCapture(0)
+        self.mp_draw = mp.solutions.drawing_utils
+
 
     #função para capturar o frame da câmera, processar a pose e calcular o ângulo de inclinação com base na posição dos pulsos
     # retorna o multiplicador e a imagem
@@ -34,7 +44,7 @@ class VisionController:
         multiplicador_velocidade = 0.0
 
         if resultados.pose_landmarks:
-            self.mp_drawing.draw_landmarks(
+            self.mp_draw.draw_landmarks(
                 frame, 
                 resultados.pose_landmarks, 
                 self.mp_pose.POSE_CONNECTIONS
