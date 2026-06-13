@@ -31,7 +31,7 @@ class VisionController:
     # retorna o multiplicador e a imagem
     #com a imagem n precisa fazer nd, ela é só para mostrar o que a câmera está capturando, o multiplicador é o que realmente importa para controlar a velocidade do carrinho
     def get_tilt_angle(self):
-        
+
         sucesso, frame = self.cap.read()
         if not sucesso:
             return 0.0, None
@@ -52,25 +52,32 @@ class VisionController:
 
             landmarks = resultados.pose_landmarks.landmark
             
-            cotovelo_esq = landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW]
-            cotovelo_dir = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
+            ombro_esq = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+            ombro_dir = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
 
-            if cotovelo_esq.visibility > 0.5 and cotovelo_dir.visibility > 0.5:
+            if ombro_esq.visibility > 0.5 and ombro_dir.visibility > 0.5:
                 
-                dx = abs(cotovelo_dir.x - cotovelo_esq.x)
-                
+                dx = abs(ombro_dir.x - ombro_esq.x)
                 if dx == 0:
                     dx = 0.00001
-                dy = cotovelo_esq.y - cotovelo_dir.y 
+                
+                dy = ombro_esq.y - ombro_dir.y 
                 
                 angulo_radianos = math.atan2(dy, dx)
                 angulo_graus = math.degrees(angulo_radianos)
                 
-                angulo_max = 35.0
+                ZONA_MORTA = 4.0  
+                ANGULO_MAX = 30.0  
                 
-                angulo_limitado = max(-angulo_max, min(angulo_max, angulo_graus))
-                
-                multiplicador_velocidade = angulo_limitado / angulo_max
+                if abs(angulo_graus) < ZONA_MORTA:
+                    multiplicador_velocidade = 0.0
+                else:
+                    angulo_limitado = max(-ANGULO_MAX, min(ANGULO_MAX, angulo_graus))
+                    
+                    if angulo_limitado > 0:
+                        multiplicador_velocidade = (angulo_limitado - ZONA_MORTA) / (ANGULO_MAX - ZONA_MORTA)
+                    else:
+                        multiplicador_velocidade = (angulo_limitado + ZONA_MORTA) / (ANGULO_MAX - ZONA_MORTA)
 
         return multiplicador_velocidade, frame
 
