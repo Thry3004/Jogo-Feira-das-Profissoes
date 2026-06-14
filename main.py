@@ -30,7 +30,6 @@ PINK = (255, 90, 190)
 PLAYER_MAX_HP = 100
 RANKING_LIMIT = 10
 
-
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
 
