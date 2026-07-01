@@ -279,12 +279,12 @@ class Player:
         self.rect.bottom = bottom
 
     def update(self, dt, keys, input_direcao=0):
-        # ⚡ OT-A: física híbrida mais responsiva. accel e friction maiores cortam
-        # o ramp-up e a inércia (deslize) que faziam o controle parecer "mole".
-        # ramp-up até max_speed: antes ~0.27s (~16 frames) → agora ~0.13s (~8 frames).
-        accel = 6000 * self.layout.scale
-        friction = 14.0
+        # Controle por "velocidade-alvo": a velocidade persegue input*max_speed.
+        # Assim a nave NAO desliza — ao alinhar os bracos (input 0) ela para, e ao
+        # inverter ela troca de lado na hora, sem inercia arrastando pro lado antigo.
+        # 'resposta' = rapidez com que a velocidade alcanca o alvo (maior = mais seco).
         max_speed = 760 * self.layout.scale
+        resposta = 5.0
         direction = 0.0
         
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -295,10 +295,15 @@ class Player:
         if direction == 0:
             direction = input_direcao
 
-        if direction != 0.0:
-            self.vel_x += direction * accel * dt
-        else:
-            self.vel_x -= self.vel_x * min(1, friction * dt)
+        target_vel = direction * max_speed
+        # Inversao imediata: comando para o lado oposto ao movimento atual descarta
+        # a inercia antiga, para a nave virar na hora em vez de arrastar pro lado velho.
+        if target_vel * self.vel_x < 0:
+            self.vel_x = 0.0
+        self.vel_x += (target_vel - self.vel_x) * min(1, resposta * dt)
+        # Zera o residual: para de vez em vez de rastejar ate zero (nada de deslize).
+        if abs(target_vel) < 1 and abs(self.vel_x) < 4 * self.layout.scale:
+            self.vel_x = 0.0
 
         self.vel_x = clamp(self.vel_x, -max_speed, max_speed)
         self.rect.x += int(self.vel_x * dt)

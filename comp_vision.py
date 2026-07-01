@@ -8,10 +8,12 @@ import time
 
 class VisionController:
     # --- Calibração ---
-    ZONA_MORTA = 5.0
-    ANGULO_MAX = 45.0
+    ZONA_MORTA = 3.0
+    ANGULO_MAX = 30.0
     # Filtro exponencial do ângulo: alto = responsivo, baixo = suave.
-    FILTRO_ALPHA = 0.6
+    # Reduzido de 0.6 -> 0.4 para deixar o movimento da nave mais suave
+    # (menos tremor/jitter da entrada da câmera; custa um leve atraso).
+    FILTRO_ALPHA = 0.4
 
     def __init__(self, debug_mode=False):
         # Backend de camera por sistema operacional. cv2.CAP_V4L2 e' exclusivo do
@@ -95,7 +97,9 @@ class VisionController:
 
             # ⚡ OT-E: NÃO espelhamos para a detecção. O ângulo usa dy (eixo
             # vertical, invariante a flip horizontal) e abs(dx), então o resultado
-            # é idêntico com ou sem espelho. Espelhamos apenas o frame de debug.
+            # é idêntico com ou sem espelho. O frame de debug é espelhado (visão
+            # selfie) SÓ depois de desenhar o esqueleto, para os pontos ficarem
+            # alinhados ao corpo.
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             # ⚡ OT-C: array não-gravável → MediaPipe processa por referência (sem cópia).
             frame_rgb.flags.writeable = False
@@ -115,7 +119,11 @@ class VisionController:
                     dx = abs(cotovelo_dir.x - cotovelo_esq.x)
                     if dx == 0:
                         dx = 0.00001
-                    dy = cotovelo_esq.y - cotovelo_dir.y
+                    # Sentido do controle: (dir - esq) faz a nave ir para o MESMO lado
+                    # da inclinacao do corpo que o jogador ve no feedback espelhado.
+                    # A deteccao roda no frame NAO espelhado, entao o eixo horizontal
+                    # fica invertido em relacao a visao do jogador; este sinal corrige.
+                    dy = cotovelo_dir.y - cotovelo_esq.y
                     angulo_graus = math.degrees(math.atan2(dy, dx))
 
                     if abs(angulo_graus) >= self.ZONA_MORTA:
@@ -126,12 +134,16 @@ class VisionController:
                             multiplicador_alvo = (angulo_limitado + self.ZONA_MORTA) / (self.ANGULO_MAX - self.ZONA_MORTA)
 
                 if self.debug_mode:
-                    frame_debug = cv2.flip(frame, 1)
+                    # Desenha o esqueleto no frame NAO espelhado (mesmas coordenadas
+                    # em que a pose foi detectada) e SO DEPOIS espelha tudo junto.
+                    # Assim os pontos ficam colados no corpo; antes eram desenhados
+                    # sobre o frame ja espelhado e caiam no lado oposto (soltos).
                     self.mp_draw.draw_landmarks(
-                        frame_debug,
+                        frame,
                         resultados.pose_landmarks,
                         self.mp_pose.POSE_CONNECTIONS,
                     )
+                    frame_debug = cv2.flip(frame, 1)
             elif self.debug_mode:
                 frame_debug = cv2.flip(frame, 1)
 
@@ -141,6 +153,10 @@ class VisionController:
                 self.FILTRO_ALPHA * multiplicador_alvo
                 + (1.0 - self.FILTRO_ALPHA) * self._last_angle
             )
+            # Bracos alinhados (alvo 0): zera o residual do filtro rapidamente, para a
+            # nave parar de vez sem um "fantasma" de inclinacao arrastando o movimento.
+            if multiplicador_alvo == 0.0 and abs(self._last_angle) < 0.05:
+                self._last_angle = 0.0
             self._pose_detectada = pose_ok
             self._last_frame = frame_debug
 
