@@ -37,6 +37,12 @@ MONITOR_INICIAL = 0
 # A janela é redimensionável arrastando as bordas, e F5/F6 diminuem/aumentam.
 FEEDBACK_LARGURA = 480
 
+# Janela extra que REPLICA a área de jogo, para espectadores num 2º monitor.
+# Ligada ao iniciar; alterne em jogo com F4. É redimensionável (arraste as bordas).
+# REPLICA_ALTURA = resolução interna da réplica (maior = mais nítida, mais CPU).
+REPLICA_ATIVA = True
+REPLICA_ALTURA = 640
+
 
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
@@ -618,6 +624,11 @@ class Game:
         self.debug_win_name = "Feedback MediaPipe - Jogo Feira"
         self.debug_win_ready = False  # janela de feedback ainda nao criada
         self.feedback_w = FEEDBACK_LARGURA  # largura atual do feedback (F5/F6 ajustam)
+        # Réplica do jogo para espectadores (janela separada, 2º monitor).
+        self.replica_ativa = REPLICA_ATIVA
+        self.replica_win_name = "Jogo (replica) - Espectadores"
+        self.replica_win_ready = False
+        self._replica_tick = 0
         self.running = True
 
 
@@ -696,6 +707,31 @@ class Game:
         if self.debug_win_ready:
             cv2.resizeWindow(self.debug_win_name, self.feedback_w, int(self.feedback_w * 9 / 16))
 
+    def _atualizar_replica(self):
+        # Espelha a área de jogo numa janela separada (2º monitor / espectadores).
+        # Atualiza a cada 2 frames (~30fps) para poupar CPU; o jogo segue a 60.
+        if not self.replica_ativa:
+            return
+        self._replica_tick = (self._replica_tick + 1) % 2
+        if self._replica_tick != 0:
+            return
+        try:
+            # Captura só a área de jogo (retrato), ignorando as barras laterais, e
+            # reduz para uma altura fixa (custo constante, independente do monitor).
+            area = self.screen.subsurface(self.layout.play_rect)
+            h = REPLICA_ALTURA
+            w = max(1, int(h * self.layout.play_rect.width / self.layout.play_rect.height))
+            pequena = pygame.transform.smoothscale(area, (w, h))
+            arr = pygame.surfarray.array3d(pequena).transpose(1, 0, 2)  # (h, w, 3) RGB
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        except (pygame.error, ValueError):
+            return
+        if not self.replica_win_ready:
+            cv2.namedWindow(self.replica_win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+            cv2.resizeWindow(self.replica_win_name, w, h)
+            self.replica_win_ready = True
+        cv2.imshow(self.replica_win_name, arr)
+
     def resize_game(self, size, fullscreen=None):
         if fullscreen is not None:
             self.fullscreen = fullscreen
@@ -751,9 +787,15 @@ class Game:
                 if event.key == pygame.K_F3:
                     self.debug_camera = not self.debug_camera
                     self.vision.debug_mode = self.debug_camera
-                    if not self.debug_camera:
-                        cv2.destroyAllWindows()
+                    if not self.debug_camera and self.debug_win_ready:
+                        cv2.destroyWindow(self.debug_win_name)  # so a janela do feedback
                         self.debug_win_ready = False
+                # Liga/desliga a réplica do jogo para espectadores.
+                if event.key == pygame.K_F4:
+                    self.replica_ativa = not self.replica_ativa
+                    if not self.replica_ativa and self.replica_win_ready:
+                        cv2.destroyWindow(self.replica_win_name)
+                        self.replica_win_ready = False
                 # Escolher o monitor: F1 = monitor 1, F2 = monitor 2.
                 if event.key == pygame.K_F1:
                     self.set_monitor(0)
@@ -1072,7 +1114,7 @@ class Game:
         self.screen.blit(txt, txt.get_rect(center=box.center))
         self.draw_ranking(self.layout.py(0.47))
         # Dicas de controle (discretas) na base da tela inicial.
-        dica = "F3 camera   F5/F6 tamanho do feedback"
+        dica = "F3 camera   F4 replica   F5/F6 tamanho do feedback"
         if self._num_monitores() > 1:
             dica = f"Monitor {self.monitor + 1}   F1/F2 tela    " + dica
         self.draw_text_play_center(dica, self.font_tiny, GRAY, self.layout.py(0.965))
@@ -1179,7 +1221,6 @@ class Game:
                         cv2.resizeWindow(self.debug_win_name, self.feedback_w, int(self.feedback_w * 9 / 16))
                         self.debug_win_ready = True
                     cv2.imshow(self.debug_win_name, frame_camera)
-                    cv2.waitKey(1)
 
                 self.handle_events()
                 self.draw_background()
@@ -1194,6 +1235,13 @@ class Game:
                     self.draw_name_screen()
                 else:
                     self.draw_end_screen()
+
+                # Réplica do jogo para espectadores (2º monitor), após desenhar o frame.
+                self._atualizar_replica()
+                # Um único waitKey por frame processa/atualiza TODAS as janelas cv2.
+                if self.replica_ativa or (self.debug_camera and frame_camera is not None):
+                    cv2.waitKey(1)
+
                 pygame.display.flip()
         finally:
             self.vision.close()
