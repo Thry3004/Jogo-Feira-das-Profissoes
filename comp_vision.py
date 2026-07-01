@@ -51,10 +51,17 @@ class VisionController:
         self.cap.set(cv2.CAP_PROP_FPS, 60)
         self.fps_real = self.cap.get(cv2.CAP_PROP_FPS)
         if self.camera_ok:
+            try:
+                backend_nome = self.cap.getBackendName()
+            except cv2.error:
+                backend_nome = "?"
+            # No Windows, se aparecer "MSMF" aqui, o backend preferido (DSHOW) falhou
+            # e caiu no fallback — MSMF pode ignorar MJPG/resolucao e abrir mais devagar.
             print(
                 "[VisionController] Camera OK: "
                 f"{int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-                f"{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} @ {self.fps_real:.0f}fps"
+                f"{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} @ {self.fps_real:.0f}fps "
+                f"[{backend_nome}]"
             )
 
         # ⚡ OT2/OT3: modelo leve + sem suavização (o jitter é tratado por filtro
@@ -171,6 +178,13 @@ class VisionController:
     def close(self):
         self._running = False
         if self._processing_thread:
-            self._processing_thread.join(timeout=1)
-        self.cap.release()
+            # timeout finito de proposito: no Windows/DShow um cap.read() travado
+            # nunca retorna; join(None) congelaria a saida do jogo.
+            self._processing_thread.join(timeout=2)
+        # So libera a captura se a thread REALMENTE terminou. Se ela ainda estiver
+        # presa dentro de cap.read() (comum no DShow do Windows), release() correria
+        # com o read() na MESMA VideoCapture (nao thread-safe) e poderia deixar o
+        # device mal liberado. Nesse caso o proprio encerramento do processo o libera.
+        if self._processing_thread is None or not self._processing_thread.is_alive():
+            self.cap.release()
         cv2.destroyAllWindows()

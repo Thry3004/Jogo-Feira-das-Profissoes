@@ -1,12 +1,30 @@
 import json
 import math
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import cv2
 import mediapipe
 import pygame
 from comp_vision import VisionController
+
+# Windows: tornar o processo per-monitor DPI aware ANTES de qualquer init de vídeo.
+# Sem isto, em telas com escala != 100% (comum em notebooks), get_desktop_sizes()
+# devolve o tamanho LÓGICO (escalado) e a janela borderless fica borrada e com o
+# layout errado. Precisa rodar antes de pygame.init(); guardado por SO (no-op fora do Windows).
+if sys.platform.startswith("win"):
+    import ctypes
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+    except Exception:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()  # system-aware (fallback antigo)
+            except Exception:
+                pass
 
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
@@ -32,6 +50,12 @@ RANKING_LIMIT = 10
 # Monitor onde o jogo abre por padrão: 0 = monitor 1, 1 = monitor 2.
 # Em jogo dá para trocar com F1 (monitor 1) e F2 (monitor 2).
 MONITOR_INICIAL = 0
+
+# Modo de tela cheia. Exclusivo = pygame.FULLSCREEN (troca o modo de vídeo).
+# Borderless = janela sem borda cobrindo o monitor (pygame.NOFRAME).
+# No Windows, o fullscreen EXCLUSIVO minimiza o jogo ao clicar nas janelas de
+# feedback/réplica do outro monitor — por isso usamos borderless lá por padrão.
+FULLSCREEN_EXCLUSIVO = not sys.platform.startswith("win")
 
 # Largura inicial (px) da janela de feedback do MediaPipe (altura = 16:9 dela).
 # A janela é redimensionável arrastando as bordas, e F5/F6 diminuem/aumentam.
@@ -629,6 +653,9 @@ class Game:
         self.replica_win_name = "Jogo (replica) - Espectadores"
         self.replica_win_ready = False
         self._replica_tick = 0
+        # Windows: ao criar uma janela cv2, ela rouba o foco do jogo (borderless).
+        # Marcamos para devolver o foco ao jogo após o próximo waitKey.
+        self._refocus_pendente = False
         self.running = True
 
 
@@ -685,8 +712,11 @@ class Game:
             except (pygame.error, IndexError):
                 info = pygame.display.Info()
                 w, h = info.current_w, info.current_h
+            # Exclusivo (Linux/mac) x borderless (Windows). Borderless evita que o
+            # jogo minimize ao clicar nas janelas de feedback/réplica do outro monitor.
+            flag = pygame.FULLSCREEN if FULLSCREEN_EXCLUSIVO else pygame.NOFRAME
             self.screen = pygame.display.set_mode(
-                (w, h), pygame.FULLSCREEN, vsync=0, display=self.monitor
+                (w, h), flag, vsync=0, display=self.monitor
             )
         else:
             self.screen = pygame.display.set_mode(
@@ -730,7 +760,24 @@ class Game:
             cv2.namedWindow(self.replica_win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
             cv2.resizeWindow(self.replica_win_name, w, h)
             self.replica_win_ready = True
+            self._refocus_pendente = True  # a nova janela cv2 rouba o foco no Windows
         cv2.imshow(self.replica_win_name, arr)
+
+    def _focar_jogo(self):
+        # Windows: uma janela cv2 recém-criada rouba o foco do teclado, e como o jogo
+        # é borderless (NOFRAME) ele para de receber teclas. Devolve o foreground ao
+        # jogo. No-op fora do Windows (Linux/mac não têm esse problema).
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import ctypes
+            hwnd = pygame.display.get_wm_info().get("window")
+            if hwnd:
+                # c_void_p preserva a largura do ponteiro; sem isso, o ctypes marshala
+                # o HWND como int de 32 bits e trunca handles altos no Windows 64-bit.
+                ctypes.windll.user32.SetForegroundWindow(ctypes.c_void_p(int(hwnd)))
+        except Exception:
+            pass
 
     def resize_game(self, size, fullscreen=None):
         if fullscreen is not None:
@@ -789,12 +836,14 @@ class Game:
                     self.vision.debug_mode = self.debug_camera
                     if not self.debug_camera and self.debug_win_ready:
                         cv2.destroyWindow(self.debug_win_name)  # so a janela do feedback
+                        cv2.waitKey(1)  # Windows: bombeia o teardown da janela agora
                         self.debug_win_ready = False
                 # Liga/desliga a réplica do jogo para espectadores.
                 if event.key == pygame.K_F4:
                     self.replica_ativa = not self.replica_ativa
                     if not self.replica_ativa and self.replica_win_ready:
                         cv2.destroyWindow(self.replica_win_name)
+                        cv2.waitKey(1)  # Windows: bombeia o teardown da janela agora
                         self.replica_win_ready = False
                 # Escolher o monitor: F1 = monitor 1, F2 = monitor 2.
                 if event.key == pygame.K_F1:
@@ -1220,6 +1269,7 @@ class Game:
                         cv2.namedWindow(self.debug_win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
                         cv2.resizeWindow(self.debug_win_name, self.feedback_w, int(self.feedback_w * 9 / 16))
                         self.debug_win_ready = True
+                        self._refocus_pendente = True  # a nova janela cv2 rouba o foco no Windows
                     cv2.imshow(self.debug_win_name, frame_camera)
 
                 self.handle_events()
@@ -1241,6 +1291,11 @@ class Game:
                 # Um único waitKey por frame processa/atualiza TODAS as janelas cv2.
                 if self.replica_ativa or (self.debug_camera and frame_camera is not None):
                     cv2.waitKey(1)
+                # Windows: se uma janela cv2 acabou de ser criada, ela roubou o foco;
+                # devolve o foreground ao jogo para o teclado voltar a funcionar.
+                if self._refocus_pendente:
+                    self._focar_jogo()
+                    self._refocus_pendente = False
 
                 pygame.display.flip()
         finally:
