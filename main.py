@@ -94,7 +94,21 @@ def save_ranking(ranking):
 
 def add_score_to_ranking(name, score, elapsed):
     ranking = load_ranking()
-    ranking.append({"name": name, "score": int(score), "time": round(elapsed, 2)})
+    score = int(score)
+    elapsed = round(elapsed, 2)
+    # Um registro por nome (comparação EXATA, case-sensitive: "Thierry" != "THIERRY").
+    # Mantém o MELHOR resultado: só atualiza a entrada existente se a nova pontuação
+    # for maior — ou igual com tempo menor. Se o nome é novo, adiciona.
+    existente = next((item for item in ranking if item.get("name") == name), None)
+    if existente is None:
+        ranking.append({"name": name, "score": score, "time": elapsed})
+    else:
+        melhor = score > existente["score"] or (
+            score == existente["score"] and elapsed < existente["time"]
+        )
+        if melhor:
+            existente["score"] = score
+            existente["time"] = elapsed
     ranking.sort(key=lambda item: (-item["score"], item["time"], item["name"]))
     save_ranking(ranking)
     return ranking[:RANKING_LIMIT]
@@ -865,7 +879,9 @@ class Game:
 
     def handle_name_input(self, event):
         if event.key == pygame.K_RETURN and self.player_name.strip():
-            self.player_name = self.player_name.strip().upper()[:10]
+            # Preserva a caixa digitada (não converte para maiúsculas), para que a
+            # comparação case-sensitive do ranking distinga "Thierry" de "THIERRY".
+            self.player_name = self.player_name.strip()[:10]
             self.reset_game()
             self.state = "countdown"
             self.countdown_timer = 0.0
@@ -873,7 +889,7 @@ class Game:
         elif event.key == pygame.K_BACKSPACE:
             self.player_name = self.player_name[:-1]
         else:
-            char = event.unicode.upper()
+            char = event.unicode
             if len(self.player_name) < 10 and (char.isalnum() or char in "_- "):
                 self.player_name += char
 
