@@ -33,6 +33,10 @@ RANKING_LIMIT = 10
 # Em jogo dá para trocar com F1 (monitor 1) e F2 (monitor 2).
 MONITOR_INICIAL = 0
 
+# Largura inicial (px) da janela de feedback do MediaPipe (altura = 16:9 dela).
+# A janela é redimensionável arrastando as bordas, e F5/F6 diminuem/aumentam.
+FEEDBACK_LARGURA = 480
+
 
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
@@ -611,6 +615,9 @@ class Game:
         # Pode ser desligada em jogo com F3 (economiza ~5-10ms se precisar de FPS).
         self.vision = VisionController(debug_mode=True)
         self.debug_camera = True
+        self.debug_win_name = "Feedback MediaPipe - Jogo Feira"
+        self.debug_win_ready = False  # janela de feedback ainda nao criada
+        self.feedback_w = FEEDBACK_LARGURA  # largura atual do feedback (F5/F6 ajustam)
         self.running = True
 
 
@@ -683,6 +690,12 @@ class Game:
         self.monitor = index
         self.resize_game(self.screen.get_size())
 
+    def ajustar_feedback(self, fator):
+        # Aumenta/diminui a janela de feedback do MediaPipe mantendo o 16:9.
+        self.feedback_w = int(clamp(self.feedback_w * fator, 240, 1600))
+        if self.debug_win_ready:
+            cv2.resizeWindow(self.debug_win_name, self.feedback_w, int(self.feedback_w * 9 / 16))
+
     def resize_game(self, size, fullscreen=None):
         if fullscreen is not None:
             self.fullscreen = fullscreen
@@ -740,11 +753,17 @@ class Game:
                     self.vision.debug_mode = self.debug_camera
                     if not self.debug_camera:
                         cv2.destroyAllWindows()
+                        self.debug_win_ready = False
                 # Escolher o monitor: F1 = monitor 1, F2 = monitor 2.
                 if event.key == pygame.K_F1:
                     self.set_monitor(0)
                 if event.key == pygame.K_F2:
                     self.set_monitor(1)
+                # Tamanho da janela de feedback: F5 diminui, F6 aumenta (mantém 16:9).
+                if event.key == pygame.K_F5:
+                    self.ajustar_feedback(0.87)
+                if event.key == pygame.K_F6:
+                    self.ajustar_feedback(1.15)
                 if self.state == "name":
                     self.handle_name_input(event)
                 elif self.state in ("win", "gameover") and event.key == pygame.K_RETURN:
@@ -1052,12 +1071,11 @@ class Game:
         txt = self.font_med.render(name, True, WHITE)
         self.screen.blit(txt, txt.get_rect(center=box.center))
         self.draw_ranking(self.layout.py(0.47))
-        # Dica de monitor (só faz sentido com mais de uma tela conectada).
+        # Dicas de controle (discretas) na base da tela inicial.
+        dica = "F3 camera   F5/F6 tamanho do feedback"
         if self._num_monitores() > 1:
-            self.draw_text_play_center(
-                f"Monitor {self.monitor + 1}  -  F1/F2 troca de tela",
-                self.font_tiny, GRAY, self.layout.py(0.965),
-            )
+            dica = f"Monitor {self.monitor + 1}   F1/F2 tela    " + dica
+        self.draw_text_play_center(dica, self.font_tiny, GRAY, self.layout.py(0.965))
 
     def draw_ranking(self, start_y):
         self.draw_text_play_center("RANKING", self.font_med, YELLOW, start_y)
@@ -1154,7 +1172,13 @@ class Game:
 
                 # Mostra a janela da câmera apenas em debug mode (F3 liga/desliga).
                 if self.debug_camera and frame_camera is not None:
-                    cv2.imshow("Feedback MediaPipe - Jogo Feira", frame_camera)
+                    if not self.debug_win_ready:
+                        # WINDOW_NORMAL: janela redimensionável pelo usuário (arrastar bordas).
+                        # WINDOW_KEEPRATIO: mantém o 16:9 ao redimensionar (quando suportado).
+                        cv2.namedWindow(self.debug_win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+                        cv2.resizeWindow(self.debug_win_name, self.feedback_w, int(self.feedback_w * 9 / 16))
+                        self.debug_win_ready = True
+                    cv2.imshow(self.debug_win_name, frame_camera)
                     cv2.waitKey(1)
 
                 self.handle_events()
