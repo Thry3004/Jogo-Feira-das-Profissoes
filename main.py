@@ -1,7 +1,6 @@
 import json
 import math
 import random
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 import cv2
@@ -280,8 +279,11 @@ class Player:
         self.rect.bottom = bottom
 
     def update(self, dt, keys, input_direcao=0):
-        accel = 2850 * self.layout.scale
-        friction = 7.0
+        # ⚡ OT-A: física híbrida mais responsiva. accel e friction maiores cortam
+        # o ramp-up e a inércia (deslize) que faziam o controle parecer "mole".
+        # ramp-up até max_speed: antes ~0.27s (~16 frames) → agora ~0.13s (~8 frames).
+        accel = 6000 * self.layout.scale
+        friction = 14.0
         max_speed = 760 * self.layout.scale
         direction = 0.0
         
@@ -588,10 +590,18 @@ class Game:
         pygame.display.set_caption("Space Invaders Vertical - Pygame")
         self.fullscreen = True
         info = pygame.display.Info()
-        self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN)
+        # ⚡ OT-G: vsync=0 evita a espera pelo refresh do monitor (corta ~8-16ms de
+        # latencia de apresentacao). Trade-off: pode causar tearing (rasgo de imagem).
+        self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN, vsync=0)
         self.clock = pygame.time.Clock()
 
-        self.vision = VisionController()
+        # ⚡ OTIMIZAÇÃO 5: Desabilitar cv2.imshow() por padrão (-5-10ms)
+        # Ativar com 'D' durante o jogo se necessário
+        # Janela de feedback da câmera (esqueleto do MediaPipe) ligada por padrão.
+        # Pode ser desligada em jogo com F3 (economiza ~5-10ms se precisar de FPS).
+        self.vision = VisionController(debug_mode=True)
+        self.debug_camera = True
+        self.running = True
 
 
         self.layout = Layout.from_screen(*self.screen.get_size())
@@ -636,9 +646,9 @@ class Game:
             self.fullscreen = fullscreen
         if self.fullscreen:
             info = pygame.display.Info()
-            self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN)
+            self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN, vsync=0)
         else:
-            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE, vsync=0)
         self.layout = Layout.from_screen(*self.screen.get_size())
         self.assets.reload(self.layout)
         self.configure_fonts()
@@ -677,16 +687,21 @@ class Game:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.vision.close()
-                pygame.quit()
-                sys.exit()
+                self.running = False
+                return
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    self.vision.close()
-                    pygame.quit()
-                    sys.exit()
+                    self.running = False
+                    return
                 if event.key == pygame.K_F11:
                     self.toggle_fullscreen()
+                # ⚡ OT5: Toggle debug da câmera com F3.
+                # (Antes era 'D', que conflitava com o movimento da nave à direita.)
+                if event.key == pygame.K_F3:
+                    self.debug_camera = not self.debug_camera
+                    self.vision.debug_mode = self.debug_camera
+                    if not self.debug_camera:
+                        cv2.destroyAllWindows()
                 if self.state == "name":
                     self.handle_name_input(event)
                 elif self.state in ("win", "gameover") and event.key == pygame.K_RETURN:
@@ -1056,6 +1071,14 @@ class Game:
             explosion.draw(self.screen)
         self.player.draw(self.screen)
         self.draw_hud()
+        # Avisos de câmera: sem webcam (não abriu) ou pose não detectada.
+        # Sem isso a nave "trava" sem motivo aparente.
+        if not getattr(self.vision, "camera_ok", True):
+            aviso = self.font_small.render("CAMERA NAO DETECTADA - feche outros apps que usam a webcam", True, RED)
+            self.screen.blit(aviso, aviso.get_rect(center=(self.layout.play_rect.centerx, self.layout.py(0.62))))
+        elif not self.vision.pose_detectada():
+            aviso = self.font_small.render("Abra os bracos para a camera te ver", True, YELLOW)
+            self.screen.blit(aviso, aviso.get_rect(center=(self.layout.play_rect.centerx, self.layout.py(0.62))))
 
     def draw_end_screen(self):
         self.draw_playing()
@@ -1071,29 +1094,37 @@ class Game:
         self.draw_text_play_center("ESC para sair", self.font_tiny, GRAY, self.layout.py(0.945))
 
     def run(self):
-        while True:
-            dt = self.clock.tick(60) / 1000
+        # try/finally garante que a câmera é SEMPRE liberada ao sair — inclusive
+        # se a janela for fechada no "X", em erro inesperado ou Ctrl+C. Sem isso,
+        # a webcam ficava travada e a próxima execução não conseguia abri-la.
+        try:
+            while self.running:
+                dt = self.clock.tick(60) / 1000
 
-            self.cv_direction, frame_camera = self.vision.get_tilt_angle()
+                self.cv_direction, frame_camera = self.vision.get_tilt_angle()
 
-            if frame_camera is not None:
-                cv2.imshow("Feedback MediaPipe - Jogo Feira", frame_camera)
-                cv2.waitKey(1) # Impede que a janela do OpenCV congele
+                # Mostra a janela da câmera apenas em debug mode (F3 liga/desliga).
+                if self.debug_camera and frame_camera is not None:
+                    cv2.imshow("Feedback MediaPipe - Jogo Feira", frame_camera)
+                    cv2.waitKey(1)
 
-            self.handle_events()
-            self.draw_background()
+                self.handle_events()
+                self.draw_background()
 
-            if self.state == "playing":
-                self.update_playing(dt)
-                self.draw_playing()
-            elif self.state == "countdown":
-                self.update_countdown(dt)
-                self.draw_countdown()
-            elif self.state == "name":
-                self.draw_name_screen()
-            else:
-                self.draw_end_screen()
-            pygame.display.flip()
+                if self.state == "playing":
+                    self.update_playing(dt)
+                    self.draw_playing()
+                elif self.state == "countdown":
+                    self.update_countdown(dt)
+                    self.draw_countdown()
+                elif self.state == "name":
+                    self.draw_name_screen()
+                else:
+                    self.draw_end_screen()
+                pygame.display.flip()
+        finally:
+            self.vision.close()
+            pygame.quit()
 
 
 if __name__ == "__main__":
