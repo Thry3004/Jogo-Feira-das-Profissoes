@@ -29,6 +29,11 @@ PINK = (255, 90, 190)
 PLAYER_MAX_HP = 100
 RANKING_LIMIT = 10
 
+# Monitor onde o jogo abre por padrão: 0 = monitor 1, 1 = monitor 2.
+# Em jogo dá para trocar com F1 (monitor 1) e F2 (monitor 2).
+MONITOR_INICIAL = 0
+
+
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
 
@@ -594,10 +599,10 @@ class Game:
         pygame.init()
         pygame.display.set_caption("Space Invaders Vertical - Pygame")
         self.fullscreen = True
-        info = pygame.display.Info()
+        self.monitor = MONITOR_INICIAL
         # ⚡ OT-G: vsync=0 evita a espera pelo refresh do monitor (corta ~8-16ms de
         # latencia de apresentacao). Trade-off: pode causar tearing (rasgo de imagem).
-        self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN, vsync=0)
+        self._criar_tela()
         self.clock = pygame.time.Clock()
 
         # ⚡ OTIMIZAÇÃO 5: Desabilitar cv2.imshow() por padrão (-5-10ms)
@@ -646,14 +651,42 @@ class Game:
         self.finish_time = 0
         self.result_text = ""
 
+    def _num_monitores(self):
+        try:
+            return max(1, pygame.display.get_num_displays())
+        except pygame.error:
+            return 1
+
+    def _criar_tela(self, size=None):
+        # Cria a janela no monitor escolhido. Em SDL2, o parametro display= do
+        # set_mode define em qual monitor a janela aparece (0 = monitor 1, etc.).
+        self.monitor = clamp(self.monitor, 0, self._num_monitores() - 1)
+        if self.fullscreen:
+            try:
+                w, h = pygame.display.get_desktop_sizes()[self.monitor]
+            except (pygame.error, IndexError):
+                info = pygame.display.Info()
+                w, h = info.current_w, info.current_h
+            self.screen = pygame.display.set_mode(
+                (w, h), pygame.FULLSCREEN, vsync=0, display=self.monitor
+            )
+        else:
+            self.screen = pygame.display.set_mode(
+                size or (720, 1280), pygame.RESIZABLE, vsync=0, display=self.monitor
+            )
+
+    def set_monitor(self, index):
+        # Troca o monitor onde o jogo aparece e recria a janela naquele monitor.
+        index = clamp(index, 0, self._num_monitores() - 1)
+        if index == self.monitor:
+            return
+        self.monitor = index
+        self.resize_game(self.screen.get_size())
+
     def resize_game(self, size, fullscreen=None):
         if fullscreen is not None:
             self.fullscreen = fullscreen
-        if self.fullscreen:
-            info = pygame.display.Info()
-            self.screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN, vsync=0)
-        else:
-            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE, vsync=0)
+        self._criar_tela(size)
         self.layout = Layout.from_screen(*self.screen.get_size())
         self.assets.reload(self.layout)
         self.configure_fonts()
@@ -707,6 +740,11 @@ class Game:
                     self.vision.debug_mode = self.debug_camera
                     if not self.debug_camera:
                         cv2.destroyAllWindows()
+                # Escolher o monitor: F1 = monitor 1, F2 = monitor 2.
+                if event.key == pygame.K_F1:
+                    self.set_monitor(0)
+                if event.key == pygame.K_F2:
+                    self.set_monitor(1)
                 if self.state == "name":
                     self.handle_name_input(event)
                 elif self.state in ("win", "gameover") and event.key == pygame.K_RETURN:
@@ -1014,6 +1052,12 @@ class Game:
         txt = self.font_med.render(name, True, WHITE)
         self.screen.blit(txt, txt.get_rect(center=box.center))
         self.draw_ranking(self.layout.py(0.47))
+        # Dica de monitor (só faz sentido com mais de uma tela conectada).
+        if self._num_monitores() > 1:
+            self.draw_text_play_center(
+                f"Monitor {self.monitor + 1}  -  F1/F2 troca de tela",
+                self.font_tiny, GRAY, self.layout.py(0.965),
+            )
 
     def draw_ranking(self, start_y):
         self.draw_text_play_center("RANKING", self.font_med, YELLOW, start_y)
